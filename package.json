@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "bot": "node bot.js",
+    "start": "node bot.js",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
