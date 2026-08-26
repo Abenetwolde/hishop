@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAuth } from '../providers/AuthProvider';
-import { ShoppingBag, Settings, LogOut, ShieldCheck, User, Mail, AtSign, Phone } from 'lucide-react';
+import { ShoppingBag, Settings, LogOut, ShieldCheck, Mail, AtSign, Phone } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
 
