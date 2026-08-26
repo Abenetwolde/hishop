@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../providers/AuthProvider';
-import { Clock, XCircle, ChevronDown, ChevronUp, Loader2, Trash2, ShoppingBag, ArrowLeft } from 'lucide-react';
+import { Clock, XCircle, ChevronDown, ChevronUp, Loader2, Trash2, ShoppingBag } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 interface OrdersProps {
@@ -13,9 +13,10 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
   const { user } = useAuth();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [expandedOrder, setExpandedOrder] = React.useState<number | null>(null);
+  const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Cancel order mutation (sets status to 'cancelled')
+  // Cancel order mutation
   const cancelMutation = useMutation({
     mutationFn: async (orderId: number) => {
       const { data, error } = await supabase
@@ -28,31 +29,57 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
       return data;
     },
     onSuccess: () => {
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (err: any) => {
+      setActionError(`Failed to cancel: ${err.message || 'Permission denied'}`);
     }
   });
 
   // Permanent Delete order mutation
   const deleteMutation = useMutation({
     mutationFn: async (orderId: number) => {
-      // Delete order items first due to FK constraint
-      await supabase.from('order_item').delete().eq('order', orderId);
-      const { error } = await supabase.from('order').delete().eq('id', orderId);
-      if (error) throw error;
+      // 1. Delete associated credit entries if any
+      await supabase.from('credit').delete().eq('order_id', orderId);
+
+      // 2. Delete associated notification entries if any
+      await supabase.from('notifications').delete().eq('order_id', orderId);
+
+      // 3. Delete order_item rows first due to FK constraint
+      const { error: itemErr } = await supabase.from('order_item').delete().eq('order', orderId);
+      if (itemErr) console.warn('order_item deletion warning:', itemErr.message);
+
+      // 4. Delete the main order row
+      const { error: orderErr } = await supabase.from('order').delete().eq('id', orderId);
+      if (orderErr) throw orderErr;
     },
     onSuccess: () => {
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       setExpandedOrder(null);
+    },
+    onError: async (err: any, orderId: number) => {
+      console.error('Direct deletion error:', err);
+      // Fallback: If DB RLS policy restricts DELETE on order table, update status to cancelled
+      try {
+        await supabase.from('order').update({ status: 'cancelled' }).eq('id', orderId);
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
+        setActionError('Order status set to Cancelled.');
+      } catch (fallbackErr: any) {
+        setActionError(`Unable to delete order: ${err.message || 'Permission denied'}`);
+      }
     }
   });
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ['orders', user?.id],
     queryFn: async () => {
+      if (!user?.id) return [];
       const { data, error } = await supabase
         .from('order')
         .select('*, order_item(*, product(*))')
-        .eq('user', user?.id)
+        .eq('user', user.id)
         .order('created_at', { ascending: false });
       if (error) throw error;
       return data || [];
@@ -102,6 +129,12 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
           {orders.length} {orders.length === 1 ? 'Order' : 'Orders'}
         </span>
       </div>
+
+      {actionError && (
+        <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-500 text-xs font-bold text-center animate-in fade-in">
+          {actionError}
+        </div>
+      )}
 
       <div className="space-y-4">
         {orders.map((order) => {
@@ -166,7 +199,7 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
                 </div>
               </div>
 
-              {/* Expanded Order Details */}
+              {/* Expanded Details */}
               {expandedOrder === order.id && (
                 <div className="px-5 pb-5 pt-2 space-y-5 animate-in slide-in-from-top-4 duration-300">
                   <div className="h-px bg-separator/30 w-full" />
@@ -223,7 +256,7 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm(`Permanently delete order #${order.slug || order.id} from your history?`)) {
+                        if (confirm(`Remove order #${order.slug || order.id} from your order history?`)) {
                           deleteMutation.mutate(order.id);
                         }
                       }}
