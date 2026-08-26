@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useCartStore } from '../store/cart-store';
 import { useAuth } from '../providers/AuthProvider';
 import { supabase } from '../lib/supabase';
-import { Trash2, Plus, Minus, ShoppingBag, Loader2, CheckCircle2, Wallet, Banknote, ShieldCheck } from 'lucide-react';
+import { Trash2, Plus, Minus, ShoppingBag, Loader2, CheckCircle2, Wallet, Banknote, ShieldCheck, ArrowRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { PaymentBottomSheet } from '../components/PaymentBottomSheet';
 
@@ -18,6 +18,7 @@ export const Cart: React.FC<CartProps> = ({ onNavigate }) => {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState(false);
+  const [placedOrderSlug, setPlacedOrderSlug] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [showPaymentSheet, setShowPaymentSheet] = useState(false);
@@ -67,12 +68,13 @@ export const Cart: React.FC<CartProps> = ({ onNavigate }) => {
 
       // 3. Clear cart and show success
       resetCart();
+      setPlacedOrderSlug(slug);
       setOrderSuccess(true);
 
-      // 4. Navigate to orders after a short delay
+      // 4. Automatically navigate to orders after 2.5s
       setTimeout(() => {
         onNavigate('orders');
-      }, 2000);
+      }, 2500);
 
     } catch (err: any) {
       console.error('Checkout error:', err);
@@ -84,13 +86,23 @@ export const Cart: React.FC<CartProps> = ({ onNavigate }) => {
 
   if (orderSuccess) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 space-y-4 text-center animate-in fade-in zoom-in duration-500">
+      <div className="flex flex-col items-center justify-center py-20 space-y-6 text-center animate-in fade-in zoom-in duration-500">
         <div className="w-24 h-24 bg-green-500/10 rounded-full flex items-center justify-center relative">
           <CheckCircle2 className="text-green-500 w-12 h-12" />
           <div className="absolute inset-0 rounded-full border-4 border-green-500/20 animate-ping" />
         </div>
-        <h2 className="text-3xl font-black">{t('orderPlaced')}</h2>
-        <p className="text-secondary font-bold text-sm max-w-[200px]">{t('orderProcessing')}</p>
+        <div className="space-y-2">
+          <h2 className="text-3xl font-black">{t('orderPlaced') || 'Order Placed!'}</h2>
+          {placedOrderSlug && <p className="text-xs font-mono font-bold text-primary">{placedOrderSlug}</p>}
+          <p className="text-secondary font-bold text-sm max-w-xs">{t('orderProcessing') || 'Your order has been recorded successfully.'}</p>
+        </div>
+        <button
+          onClick={() => onNavigate('orders')}
+          className="px-6 py-4 bg-primary text-button-text rounded-2xl font-black text-xs uppercase tracking-widest flex items-center space-x-2 shadow-lg active:scale-95 transition-transform"
+        >
+          <span>View Order History</span>
+          <ArrowRight size={16} />
+        </button>
       </div>
     );
   }

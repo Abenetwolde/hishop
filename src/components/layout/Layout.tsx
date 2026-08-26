@@ -46,7 +46,7 @@ export const Layout: React.FC = () => {
       case 'search': return <Search onNavigate={onNavigate} />;
       case 'cart': return <Cart onNavigate={onNavigate} />;
       case 'profile': return <Profile />;
-      case 'orders': return <Orders />;
+      case 'orders': return <Orders onNavigate={onNavigate} />;
       case 'notifications': return <Notifications />;
       case 'all-products': return <AllProducts onNavigate={onNavigate} />;
       case 'category': return (

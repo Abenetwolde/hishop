@@ -1,17 +1,21 @@
 import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../providers/AuthProvider';
-import { Clock, XCircle, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { Clock, XCircle, ChevronDown, ChevronUp, Loader2, Trash2, ShoppingBag, ArrowLeft } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-export const Orders: React.FC = () => {
+interface OrdersProps {
+  onNavigate?: (tab: string) => void;
+}
+
+export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
   const { user } = useAuth();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [expandedOrder, setExpandedOrder] = React.useState<number | null>(null);
 
+  // Cancel order mutation (sets status to 'cancelled')
   const cancelMutation = useMutation({
     mutationFn: async (orderId: number) => {
       const { data, error } = await supabase
@@ -28,7 +32,21 @@ export const Orders: React.FC = () => {
     }
   });
 
-  const { data: orders, isLoading } = useQuery({
+  // Permanent Delete order mutation
+  const deleteMutation = useMutation({
+    mutationFn: async (orderId: number) => {
+      // Delete order items first due to FK constraint
+      await supabase.from('order_item').delete().eq('order', orderId);
+      const { error } = await supabase.from('order').delete().eq('id', orderId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      setExpandedOrder(null);
+    }
+  });
+
+  const { data: orders = [], isLoading } = useQuery({
     queryKey: ['orders', user?.id],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -37,115 +55,192 @@ export const Orders: React.FC = () => {
         .eq('user', user?.id)
         .order('created_at', { ascending: false });
       if (error) throw error;
-      return data;
+      return data || [];
     },
     enabled: !!user?.id
   });
 
-  if (isLoading) return <div className="space-y-4">
-    {[1, 2, 3].map(i => <div key={i} className="h-32 bg-secondary-bg animate-pulse rounded-2xl" />)}
-  </div>;
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-32 bg-secondary-bg animate-pulse rounded-3xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (orders.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 space-y-6 text-center animate-in fade-in duration-300">
+        <div className="w-20 h-20 bg-secondary-bg rounded-full flex items-center justify-center shadow-inner">
+          <ShoppingBag className="text-secondary w-9 h-9" />
+        </div>
+        <div className="space-y-2">
+          <h2 className="text-2xl font-black">{t('noOrdersYet') || 'No Orders Yet'}</h2>
+          <p className="text-secondary font-bold text-xs max-w-xs">
+            {t('noOrdersDesc') || 'You have not placed any orders yet. Browse products and place your first order!'}
+          </p>
+        </div>
+        {onNavigate && (
+          <button
+            onClick={() => onNavigate('home')}
+            className="px-6 py-3.5 bg-primary text-button-text rounded-2xl font-black text-xs uppercase tracking-wider shadow-lg active:scale-95 transition-transform"
+          >
+            {t('browseProducts') || 'Browse Catalog'}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold">{t('myOrders')}</h2>
-      <div className="space-y-4">
-        {orders?.map(order => (
-          <div key={order.id} className="bg-bg border border-separator/30 rounded-3xl overflow-hidden shadow-sm transition-all duration-300">
-            <div 
-              onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
-              className="p-5 space-y-4 cursor-pointer active:bg-secondary-bg/30 transition-colors"
-            >
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <p className="text-[10px] font-black text-secondary uppercase tracking-widest opacity-60">Order #{order.slug}</p>
-                  <div className="flex items-center text-[10px] font-bold text-secondary uppercase tracking-tight">
-                    <Clock size={12} className="mr-1.5 opacity-40" />
-                    {new Date(order.created_at).toLocaleDateString()}
-                  </div>
-                </div>
-                <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
-                  order.status === 'COMPLETED' ? 'bg-green-500/10 text-green-500' : 
-                  order.status === 'cancelled' ? 'bg-error/10 text-error' :
-                  'bg-primary/10 text-primary'
-                }`}>
-                  {t(order.status.toLowerCase())}
-                </span>
-              </div>
+    <div className="space-y-6 pb-12 animate-in slide-in-from-bottom duration-500">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-black">{t('myOrders') || 'Order History'}</h2>
+        <span className="px-3 py-1 bg-primary/10 text-primary text-xs font-black rounded-lg">
+          {orders.length} {orders.length === 1 ? 'Order' : 'Orders'}
+        </span>
+      </div>
 
-              <div className="flex items-center justify-between">
-                <div className="flex -space-x-3">
-                  {order.order_item.slice(0, 4).map((item: any) => (
-                    <div key={item.id} className="w-10 h-10 rounded-full border-2 border-bg overflow-hidden shadow-sm">
-                      <img 
-                        src={item.product?.heroImage} 
-                        className="w-full h-full object-cover" 
-                        alt=""
-                      />
+      <div className="space-y-4">
+        {orders.map((order) => {
+          const isPending = (order.status || '').toLowerCase() === 'pending';
+          const isCancelled = (order.status || '').toLowerCase() === 'cancelled';
+          const isPaid = (order.status || '').toLowerCase() === 'paid' || (order.status || '').toLowerCase() === 'completed';
+
+          return (
+            <div
+              key={order.id}
+              className="bg-bg border border-separator/30 rounded-3xl overflow-hidden shadow-sm transition-all duration-300 hover:border-primary/30"
+            >
+              <div
+                onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
+                className="p-5 space-y-4 cursor-pointer active:bg-secondary-bg/30 transition-colors"
+              >
+                <div className="flex justify-between items-start">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-secondary uppercase tracking-widest opacity-60">
+                      Order #{order.slug || order.id}
+                    </p>
+                    <div className="flex items-center text-[10px] font-bold text-secondary uppercase tracking-tight">
+                      <Clock size={12} className="mr-1.5 opacity-40" />
+                      {new Date(order.created_at).toLocaleDateString()}
                     </div>
-                  ))}
-                  {order.order_item.length > 4 && (
-                    <div className="w-10 h-10 rounded-full border-2 border-bg bg-secondary-bg flex items-center justify-center text-[10px] font-black shadow-sm">
-                      +{order.order_item.length - 4}
-                    </div>
+                  </div>
+                  <span
+                    className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                      isPaid
+                        ? 'bg-green-500/10 text-green-500'
+                        : isCancelled
+                        ? 'bg-error/10 text-error'
+                        : 'bg-primary/10 text-primary'
+                    }`}
+                  >
+                    {order.status}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex -space-x-3">
+                    {order.order_item?.slice(0, 4).map((item: any) => (
+                      <div key={item.id} className="w-10 h-10 rounded-full border-2 border-bg overflow-hidden shadow-sm bg-secondary-bg">
+                        <img
+                          src={item.product?.heroImage || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&w=100&q=80'}
+                          className="w-full h-full object-cover"
+                          alt=""
+                        />
+                      </div>
+                    ))}
+                    {order.order_item?.length > 4 && (
+                      <div className="w-10 h-10 rounded-full border-2 border-bg bg-secondary-bg flex items-center justify-center text-[10px] font-black shadow-sm">
+                        +{order.order_item.length - 4}
+                      </div>
+                    )}
+                  </div>
+                  {expandedOrder === order.id ? (
+                    <ChevronUp size={18} className="text-secondary opacity-40" />
+                  ) : (
+                    <ChevronDown size={18} className="text-secondary opacity-40" />
                   )}
                 </div>
-                {expandedOrder === order.id ? <ChevronUp size={18} className="text-secondary opacity-40" /> : <ChevronDown size={18} className="text-secondary opacity-40" />}
               </div>
-            </div>
 
-            {/* Expanded Details */}
-            {expandedOrder === order.id && (
-              <div className="px-5 pb-5 pt-2 space-y-5 animate-in slide-in-from-top-4 duration-300">
-                <div className="h-px bg-separator/30 w-full" />
-                
-                <div className="space-y-3">
-                  {order.order_item.map((item: any) => (
-                    <div key={item.id} className="flex items-center justify-between group">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-10 h-10 rounded-xl bg-secondary-bg/50 p-1">
-                          <img src={item.product?.heroImage} className="w-full h-full object-contain" alt="" />
+              {/* Expanded Order Details */}
+              {expandedOrder === order.id && (
+                <div className="px-5 pb-5 pt-2 space-y-5 animate-in slide-in-from-top-4 duration-300">
+                  <div className="h-px bg-separator/30 w-full" />
+
+                  <div className="space-y-3">
+                    {order.order_item?.map((item: any) => (
+                      <div key={item.id} className="flex items-center justify-between group">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-xl bg-secondary-bg/50 p-1 flex-shrink-0">
+                            <img
+                              src={item.product?.heroImage || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&w=100&q=80'}
+                              className="w-full h-full object-cover rounded-lg"
+                              alt=""
+                            />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold line-clamp-1">{item.product?.title || 'Product'}</p>
+                            <p className="text-[10px] font-bold text-secondary">
+                              {item.quantity} x {Number(item.product?.price || 0).toLocaleString()} ETB
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-xs font-bold line-clamp-1">{item.product?.title}</p>
-                          <p className="text-[10px] font-bold text-secondary">{item.quantity} x {item.product?.price.toLocaleString()} ETB</p>
-                        </div>
+                        <span className="text-xs font-black">
+                          {(item.quantity * Number(item.product?.price || 0)).toLocaleString()} ETB
+                        </span>
                       </div>
-                      <span className="text-xs font-black">{(item.quantity * item.product?.price).toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
 
-                <div className="bg-secondary-bg/30 rounded-2xl p-4 space-y-3">
-                  <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-secondary">
-                    <span>{t('total')}</span>
-                    <span className="text-sm font-black text-primary">{order.totalPrice.toLocaleString()} ETB</span>
+                  <div className="bg-secondary-bg/30 rounded-2xl p-4 space-y-3">
+                    <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest text-secondary">
+                      <span>Total Amount</span>
+                      <span className="text-sm font-black text-primary">{Number(order.totalPrice || 0).toLocaleString()} ETB</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                    {isPending && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm('Cancel this pending order?')) {
+                            cancelMutation.mutate(order.id);
+                          }
+                        }}
+                        disabled={cancelMutation.isPending}
+                        className="w-full py-3.5 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 active:scale-[0.98] transition-all disabled:opacity-50"
+                      >
+                        {cancelMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
+                        <span>Cancel Order</span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Permanently delete order #${order.slug || order.id} from your history?`)) {
+                          deleteMutation.mutate(order.id);
+                        }
+                      }}
+                      disabled={deleteMutation.isPending}
+                      className={`w-full py-3.5 bg-error/10 text-error hover:bg-error/20 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 active:scale-[0.98] transition-all disabled:opacity-50 ${
+                        !isPending ? 'col-span-2' : ''
+                      }`}
+                    >
+                      {deleteMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                      <span>Delete Order</span>
+                    </button>
                   </div>
                 </div>
-
-                {order.status.toLowerCase() === 'pending' && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(t('confirmCancel'))) {
-                        cancelMutation.mutate(order.id);
-                      }
-                    }}
-                    disabled={cancelMutation.isPending}
-                    className="w-full py-4 bg-error/10 text-error rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center space-x-2 active:scale-[0.98] transition-all disabled:opacity-50"
-                  >
-                    {cancelMutation.isPending ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <XCircle size={16} />
-                    )}
-                    <span>{t('cancelOrder')}</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
