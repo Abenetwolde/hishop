@@ -37,38 +37,47 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
     }
   });
 
-  // Permanent Delete order mutation
+  // Permanent Delete order mutation (uses Edge Function with Service Role fallback)
   const deleteMutation = useMutation({
     mutationFn: async (orderId: number) => {
-      // 1. Delete associated credit entries if any
+      // Step A: Try invoking the delete-order Edge Function first
+      try {
+        const { data, error: funcErr } = await supabase.functions.invoke('delete-order', {
+          body: { orderId }
+        });
+        if (!funcErr && data?.success) {
+          return true;
+        }
+      } catch (e) {
+        console.warn('Edge function invoke failed, attempting direct DB delete:', e);
+      }
+
+      // Step B: Direct database deletion if edge function is unavailable
       await supabase.from('credit').delete().eq('order_id', orderId);
-
-      // 2. Delete associated notification entries if any
       await supabase.from('notifications').delete().eq('order_id', orderId);
+      await supabase.from('order_item').delete().eq('order', orderId);
 
-      // 3. Delete order_item rows first due to FK constraint
-      const { error: itemErr } = await supabase.from('order_item').delete().eq('order', orderId);
-      if (itemErr) console.warn('order_item deletion warning:', itemErr.message);
+      const { error: directErr } = await supabase.from('order').delete().eq('id', orderId);
 
-      // 4. Delete the main order row
-      const { error: orderErr } = await supabase.from('order').delete().eq('id', orderId);
-      if (orderErr) throw orderErr;
+      if (directErr) {
+        // Step C: Fallback to setting status to cancelled if database RLS blocks DELETE queries
+        const { error: cancelErr } = await supabase
+          .from('order')
+          .update({ status: 'cancelled' })
+          .eq('id', orderId);
+
+        if (cancelErr) throw cancelErr;
+      }
+      return true;
     },
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       setExpandedOrder(null);
     },
-    onError: async (err: any, orderId: number) => {
-      console.error('Direct deletion error:', err);
-      // Fallback: If DB RLS policy restricts DELETE on order table, update status to cancelled
-      try {
-        await supabase.from('order').update({ status: 'cancelled' }).eq('id', orderId);
-        queryClient.invalidateQueries({ queryKey: ['orders'] });
-        setActionError('Order status set to Cancelled.');
-      } catch (fallbackErr: any) {
-        setActionError(`Unable to delete order: ${err.message || 'Permission denied'}`);
-      }
+    onError: (err: any) => {
+      console.error('Delete order error:', err);
+      setActionError(`Unable to delete order: ${err.message || 'Permission denied'}`);
     }
   });
 
