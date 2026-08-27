@@ -2,12 +2,19 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../providers/AuthProvider';
-import { Clock, XCircle, ChevronDown, ChevronUp, Loader2, Trash2, ShoppingBag } from 'lucide-react';
+import { Clock, XCircle, ChevronDown, ChevronUp, Loader2, Trash2, ShoppingBag, AlertTriangle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 interface OrdersProps {
   onNavigate?: (tab: string) => void;
 }
+
+type ConfirmModalState = {
+  isOpen: boolean;
+  type: 'cancel' | 'delete';
+  orderId: number;
+  orderSlug: string;
+} | null;
 
 export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
   const { user } = useAuth();
@@ -15,6 +22,8 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
   const queryClient = useQueryClient();
   const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState>(null);
 
   // Cancel order mutation
   const cancelMutation = useMutation({
@@ -23,17 +32,20 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
         .from('order')
         .update({ status: 'cancelled' })
         .eq('id', orderId)
-        .select('*')
-        .single();
+        .select('*');
       if (error) throw error;
       return data;
     },
     onSuccess: () => {
       setActionError(null);
+      setActionSuccess('Order status updated to Cancelled.');
       queryClient.invalidateQueries({ queryKey: ['orders'] });
+      setConfirmModal(null);
     },
     onError: (err: any) => {
-      setActionError(`Failed to cancel: ${err.message || 'Permission denied'}`);
+      console.error('Cancel order error:', err);
+      setActionError(`Failed to cancel order: ${err.message || 'Permission denied'}`);
+      setConfirmModal(null);
     }
   });
 
@@ -60,6 +72,7 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
       const { error: directErr } = await supabase.from('order').delete().eq('id', orderId);
 
       if (directErr) {
+        console.warn('Direct order delete restricted by RLS, setting status to cancelled:', directErr.message);
         // Step C: Fallback to setting status to cancelled if database RLS blocks DELETE queries
         const { error: cancelErr } = await supabase
           .from('order')
@@ -72,14 +85,26 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
     },
     onSuccess: () => {
       setActionError(null);
+      setActionSuccess('Order successfully removed from history.');
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       setExpandedOrder(null);
+      setConfirmModal(null);
     },
     onError: (err: any) => {
       console.error('Delete order error:', err);
       setActionError(`Unable to delete order: ${err.message || 'Permission denied'}`);
+      setConfirmModal(null);
     }
   });
+
+  const handleConfirmAction = () => {
+    if (!confirmModal) return;
+    if (confirmModal.type === 'cancel') {
+      cancelMutation.mutate(confirmModal.orderId);
+    } else {
+      deleteMutation.mutate(confirmModal.orderId);
+    }
+  };
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ['orders', user?.id],
@@ -130,8 +155,10 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
     );
   }
 
+  const isActionPending = cancelMutation.isPending || deleteMutation.isPending;
+
   return (
-    <div className="space-y-6 pb-12 animate-in slide-in-from-bottom duration-500">
+    <div className="space-y-6 pb-12 animate-in slide-in-from-bottom duration-500 relative">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-black">{t('myOrders') || 'Order History'}</h2>
         <span className="px-3 py-1 bg-primary/10 text-primary text-xs font-black rounded-lg">
@@ -142,6 +169,12 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
       {actionError && (
         <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-500 text-xs font-bold text-center animate-in fade-in">
           {actionError}
+        </div>
+      )}
+
+      {actionSuccess && (
+        <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-2xl text-green-500 text-xs font-bold text-center animate-in fade-in">
+          {actionSuccess}
         </div>
       )}
 
@@ -248,33 +281,39 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                     {isPending && (
                       <button
+                        type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm('Cancel this pending order?')) {
-                            cancelMutation.mutate(order.id);
-                          }
+                          setConfirmModal({
+                            isOpen: true,
+                            type: 'cancel',
+                            orderId: order.id,
+                            orderSlug: order.slug || `#${order.id}`,
+                          });
                         }}
-                        disabled={cancelMutation.isPending}
-                        className="w-full py-3.5 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 active:scale-[0.98] transition-all disabled:opacity-50"
+                        className="w-full py-3.5 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 active:scale-[0.98] transition-all"
                       >
-                        {cancelMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
+                        <XCircle size={16} />
                         <span>Cancel Order</span>
                       </button>
                     )}
 
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm(`Remove order #${order.slug || order.id} from your order history?`)) {
-                          deleteMutation.mutate(order.id);
-                        }
+                        setConfirmModal({
+                          isOpen: true,
+                          type: 'delete',
+                          orderId: order.id,
+                          orderSlug: order.slug || `#${order.id}`,
+                        });
                       }}
-                      disabled={deleteMutation.isPending}
-                      className={`w-full py-3.5 bg-error/10 text-error hover:bg-error/20 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 active:scale-[0.98] transition-all disabled:opacity-50 ${
+                      className={`w-full py-3.5 bg-error/10 text-error hover:bg-error/20 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 active:scale-[0.98] transition-all ${
                         !isPending ? 'col-span-2' : ''
                       }`}
                     >
-                      {deleteMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                      <Trash2 size={16} />
                       <span>Delete Order</span>
                     </button>
                   </div>
@@ -284,6 +323,57 @@ export const Orders: React.FC<OrdersProps> = ({ onNavigate }) => {
           );
         })}
       </div>
+
+      {/* Confirmation Modal */}
+      {confirmModal?.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-bg border border-separator/40 rounded-3xl w-full max-w-sm p-6 space-y-6 shadow-2xl animate-in zoom-in-95 duration-200 text-center">
+            <div className="w-16 h-16 rounded-full mx-auto flex items-center justify-center bg-error/10 text-error">
+              <AlertTriangle size={32} />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xl font-black text-text">
+                {confirmModal.type === 'cancel' ? 'Cancel Order' : 'Delete Order'}
+              </h3>
+              <p className="text-xs text-secondary font-bold leading-relaxed">
+                {confirmModal.type === 'cancel'
+                  ? `Are you sure you want to cancel Order ${confirmModal.orderSlug}?`
+                  : `Are you sure you want to permanently delete Order ${confirmModal.orderSlug} from your history?`}
+              </p>
+            </div>
+
+            <div className="space-y-3 pt-2">
+              <button
+                type="button"
+                disabled={isActionPending}
+                onClick={handleConfirmAction}
+                className="w-full py-4 bg-error text-white font-black text-xs uppercase tracking-widest rounded-2xl shadow-lg active:scale-95 transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
+              >
+                {isActionPending ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <span>
+                    {confirmModal.type === 'cancel' ? 'Yes, Cancel Order' : 'Yes, Delete Order'}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                disabled={isActionPending}
+                onClick={() => setConfirmModal(null)}
+                className="w-full py-3 bg-secondary-bg text-secondary font-bold text-xs uppercase tracking-wider rounded-2xl active:scale-95 transition-all"
+              >
+                Keep Order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
